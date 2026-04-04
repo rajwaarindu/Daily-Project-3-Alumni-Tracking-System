@@ -31,6 +31,8 @@ Project React Vite (Frontend Simulation) untuk sistem pelacakan alumni otomatis 
    ```
 4. Buka `http://localhost:5173` di browser.
 
+Catatan: `npm run dev` sekarang menjalankan Vite dan API autentikasi lokal secara bersamaan. Data akun login tersimpan di `src/database/db.sqlite`.
+
 ---
 
 ## Tabel Pengujian Aplikasi (Quality Aspects)

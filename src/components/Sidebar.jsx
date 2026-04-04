@@ -1,5 +1,6 @@
 import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { 
   LayoutDashboard, 
   Users, 
@@ -7,13 +8,28 @@ import {
   CheckSquare, 
   FileText, 
   Settings,
-  Radar
+  Building2,
+  Radar,
+  ChevronDown,
+  LogOut,
 } from 'lucide-react';
 import { useAppContext } from '../store/AppContext';
 
 export default function Sidebar() {
-  const { stats } = useAppContext();
+  const { stats, authUser, logout } = useAppContext();
   const location = useLocation();
+  const navigate = useNavigate();
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  useEffect(() => {
+    setProfileOpen(false);
+  }, [location.pathname]);
+
+  const handleLogout = async () => {
+    await logout();
+    setProfileOpen(false);
+    navigate('/auth');
+  };
 
   const navItems = [
     { section: 'Main Menu' },
@@ -21,6 +37,7 @@ export default function Sidebar() {
     { path: '/alumni', label: 'Data Alumni', icon: Users },
     { path: '/tracking', label: 'Pelacakan (Job)', icon: Search },
     { path: '/reviews', label: 'Verifikasi Manual', icon: CheckSquare, badge: stats.needReview },
+    { path: '/ppdikti', label: 'Cek PDDIKTI', icon: Building2 },
     
     { section: 'Laporan & Setting' },
     { path: '/history', label: 'Laporan & Riwayat', icon: FileText },
@@ -67,12 +84,36 @@ export default function Sidebar() {
       </div>
 
       <div className="sidebar-footer">
-        <div className="role-badge">
-          <div className="role-avatar">AD</div>
-          <div className="role-info">
-            <div className="role-name">System Admin</div>
-            <div className="role-label">Operator / Reviewer</div>
-          </div>
+        <div className="profile-menu-wrap">
+          <button
+            type="button"
+            className="role-badge role-badge-button"
+            onClick={() => setProfileOpen(prev => !prev)}
+          >
+            <div className="role-avatar">
+              {(authUser?.name || 'AD')
+                .split(' ')
+                .map(part => part[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase()}
+            </div>
+            <div className="role-info">
+              <div className="role-name">{authUser?.name || 'System Admin'}</div>
+              <div className="role-label">{authUser?.email || 'Operator / Reviewer'}</div>
+            </div>
+            <ChevronDown size={14} className="profile-chevron" />
+          </button>
+
+          {profileOpen && (
+            <div className="profile-menu">
+              <div className="profile-menu-header">Profile</div>
+              <button type="button" className="profile-menu-item" onClick={handleLogout}>
+                <LogOut size={14} />
+                Logout
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </aside>

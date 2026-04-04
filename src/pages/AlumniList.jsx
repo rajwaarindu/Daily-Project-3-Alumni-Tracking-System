@@ -3,10 +3,12 @@ import { useAppContext } from '../store/AppContext';
 import { Search, Plus, Edit2, X, GraduationCap, Trash2 } from 'lucide-react';
 
 export default function AlumniList() {
-  const { alumni, addAlumni, updateAlumni, deleteAlumni } = useAppContext();
+  const { alumni, alumniLoading, addAlumni, updateAlumni, deleteAlumni } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [selectedAlumni, setSelectedAlumni] = useState(null);
+  const [formError, setFormError] = useState('');
   const [newAlumni, setNewAlumni] = useState({
     nama_lengkap: '',
     variasi_nama: '',
@@ -19,8 +21,9 @@ export default function AlumniList() {
     a.id.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
+    setFormError('');
     const dataToSave = {
       nama_lengkap: newAlumni.nama_lengkap,
       variasi_nama: newAlumni.variasi_nama.split(',').map(s => s.trim()).filter(Boolean),
@@ -28,17 +31,26 @@ export default function AlumniList() {
       konteks_kata_kunci: newAlumni.konteks_kata_kunci.split(',').map(s => s.trim()).filter(Boolean),
     };
 
-    if (editingId) {
-      updateAlumni(editingId, dataToSave);
-    } else {
-      addAlumni({
-        ...dataToSave,
-        status_pelacakan: 'Belum Dilacak',
-        last_tracked_date: null,
-        hasil: null
-      });
+    try {
+      if (editingId) {
+        const updated = await updateAlumni(editingId, dataToSave);
+        if (selectedAlumni?.id === updated.id) {
+          setSelectedAlumni(updated);
+        }
+      } else {
+        const created = await addAlumni({
+          ...dataToSave,
+          status_pelacakan: 'Belum Dilacak',
+          last_tracked_date: null,
+          hasil: null,
+          ppdikti_verified: false,
+        });
+        setSelectedAlumni(created);
+      }
+      closeModal();
+    } catch (error) {
+      setFormError(error.message || 'Gagal menyimpan data alumni.');
     }
-    closeModal();
   };
 
   const handleEdit = (alumniData) => {
@@ -52,9 +64,16 @@ export default function AlumniList() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (window.confirm('Yakin ingin menghapus alumni ini?')) {
-      deleteAlumni(id);
+      try {
+        await deleteAlumni(id);
+        if (selectedAlumni?.id === id) {
+          setSelectedAlumni(null);
+        }
+      } catch (error) {
+        window.alert(error.message || 'Gagal menghapus data alumni.');
+      }
     }
   };
 
@@ -71,6 +90,12 @@ export default function AlumniList() {
       case 'Belum Dilacak': return <span className="badge badge-muted">Belum Dilacak</span>;
       default: return <span className="badge badge-danger">Tidak Ditemukan</span>;
     }
+  };
+
+  const getPpdiktiBadge = (isVerified) => {
+    return isVerified
+      ? <span className="badge badge-success">Terverifikasi</span>
+      : <span className="badge badge-muted">Belum Verifikasi</span>;
   };
 
   return (
@@ -108,12 +133,18 @@ export default function AlumniList() {
                 <th>Variasi Penulisan (Alias)</th>
                 <th>Konteks Pencarian</th>
                 <th>Status Pelacakan</th>
+                <th>Verifikasi PPDIKTI</th>
                 <th>Aksi</th>
               </tr>
             </thead>
             <tbody>
+              {alumniLoading && (
+                <tr>
+                  <td colSpan="7" className="text-center py-8 text-muted">Memuat data dari Alumni.sqlite...</td>
+                </tr>
+              )}
               {filteredAlumni.map(a => (
-                <tr key={a.id}>
+                <tr key={a.id} className="table-row-clickable" onClick={() => setSelectedAlumni(a)}>
                   <td><strong>{a.id}</strong></td>
                   <td>
                     <div className="flex items-center gap-2">
@@ -133,23 +164,95 @@ export default function AlumniList() {
                     </div>
                   </td>
                   <td>{getStatusBadge(a.status_pelacakan)}</td>
+                  <td>{getPpdiktiBadge(a.ppdikti_verified)}</td>
                   <td>
                     <div className="flex gap-2">
-                      <button className="btn btn-xs btn-secondary" onClick={() => handleEdit(a)}><Edit2 size={12} /> Edit</button>
-                      <button className="btn btn-xs btn-outline border-red-500/50 text-red-500 hover:bg-red-500 hover:text-white" onClick={() => handleDelete(a.id)}><Trash2 size={12} /> Hapus</button>
+                      <button className="btn btn-xs btn-secondary" onClick={(event) => { event.stopPropagation(); handleEdit(a); }}><Edit2 size={12} /> Edit</button>
+                      <button className="btn btn-xs btn-outline border-red-500/50 text-red-500 hover:bg-red-500 hover:text-white" onClick={(event) => { event.stopPropagation(); handleDelete(a.id); }}><Trash2 size={12} /> Hapus</button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {filteredAlumni.length === 0 && (
+              {!alumniLoading && filteredAlumni.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="text-center py-8 text-muted">Tidak ada data alumni ditemukan</td>
+                  <td colSpan="7" className="text-center py-8 text-muted">Tidak ada data alumni ditemukan</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {selectedAlumni && (
+        <div className="card mt-4">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">Detail Alumni Terpilih</h3>
+              <p className="text-sm text-muted">Klik baris data untuk menampilkan detail.</p>
+            </div>
+            <div>{getPpdiktiBadge(selectedAlumni.ppdikti_verified)}</div>
+          </div>
+
+          <div className="ppdikti-detail-card">
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">ID</div>
+              <div className="ppdikti-detail-value">{selectedAlumni.id}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">Nama Lengkap</div>
+              <div className="ppdikti-detail-value">{selectedAlumni.nama_lengkap}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">Variasi Nama</div>
+              <div className="ppdikti-detail-value">{(selectedAlumni.variasi_nama || []).join(', ') || '-'}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">Afiliasi Kata Kunci</div>
+              <div className="ppdikti-detail-value">{(selectedAlumni.afiliasi_kata_kunci || []).join(', ') || '-'}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">Konteks Kata Kunci</div>
+              <div className="ppdikti-detail-value">{(selectedAlumni.konteks_kata_kunci || []).join(', ') || '-'}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">Status Pelacakan</div>
+              <div className="ppdikti-detail-value">{selectedAlumni.status_pelacakan}</div>
+            </div>
+            <div className="ppdikti-detail-row">
+              <div className="ppdikti-detail-label">PPDIKTI Dicek Pada</div>
+              <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_checked_at || '-'}</div>
+            </div>
+          </div>
+
+          {selectedAlumni.ppdikti_detail && (
+            <div className="ppdikti-result-section mt-4">
+              <h3 className="ppdikti-subtitle">Data PPDIKTI Tertaut</h3>
+              <div className="ppdikti-detail-card">
+                <div className="ppdikti-detail-row">
+                  <div className="ppdikti-detail-label">Nama</div>
+                  <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_detail.nama || '-'}</div>
+                </div>
+                <div className="ppdikti-detail-row">
+                  <div className="ppdikti-detail-label">NIM</div>
+                  <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_detail.nim || '-'}</div>
+                </div>
+                <div className="ppdikti-detail-row">
+                  <div className="ppdikti-detail-label">Perguruan Tinggi</div>
+                  <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_detail.nama_pt || '-'}</div>
+                </div>
+                <div className="ppdikti-detail-row">
+                  <div className="ppdikti-detail-label">Program Studi</div>
+                  <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_detail.prodi || '-'}</div>
+                </div>
+                <div className="ppdikti-detail-row">
+                  <div className="ppdikti-detail-label">Status Saat Ini</div>
+                  <div className="ppdikti-detail-value">{selectedAlumni.ppdikti_detail.status_saat_ini || '-'}</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {isModalOpen && (
         <div className="modal-overlay">
@@ -160,6 +263,8 @@ export default function AlumniList() {
             </div>
             
             <form onSubmit={handleSave}>
+              {formError && <div className="auth-alert mb-4">{formError}</div>}
+
               <div className="form-group">
                 <label className="form-label">Nama Lengkap</label>
                 <input 
