@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, BadgeCheck, Database, Lock, Mail, Sparkles, ShieldCheck, UserPlus, Users } from 'lucide-react';
 import { useAppContext } from '../store/AppContext';
+import { getPpdiktiSummary, pickRandomItems } from '../lib/verifiedAlumni';
 
 export default function Auth() {
   const navigate = useNavigate();
-  const { authUser, signIn, signUp } = useAppContext();
+  const { authUser, signIn, signUp, publicVerifiedAlumni, verifiedShowcaseLoading } = useAppContext();
   const [mode, setMode] = useState('signin');
   const [form, setForm] = useState({
     name: '',
@@ -15,6 +16,7 @@ export default function Auth() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const verifiedShowcase = useMemo(() => pickRandomItems(publicVerifiedAlumni, 3), [publicVerifiedAlumni]);
 
   useEffect(() => {
     if (authUser) {
@@ -83,6 +85,58 @@ export default function Auth() {
               <Database size={16} />
               <span>Data akun tersimpan ke <strong>Database dengan keamanan tinggi</strong></span>
             </div>
+            <div className="auth-feature">
+              <ShieldCheck size={16} />
+              <span>Status verifikasi alumni ditarik dari hasil cek PPDIKTI yang tersimpan di database.</span>
+            </div>
+          </div>
+
+          <div className="auth-mini-stats">
+            <div className="auth-mini">
+              <div className="auth-mini-value">{publicVerifiedAlumni.length}</div>
+              <div className="auth-mini-label">Terverifikasi PPDIKTI</div>
+            </div>
+            <div className="auth-mini">
+              <div className="auth-mini-value">100%</div>
+              <div className="auth-mini-label">Data dari Source PPDIKTI</div>
+            </div>
+            <div className="auth-mini">
+              <div className="auth-mini-value">Live</div>
+              <div className="auth-mini-label">Tersinkron ke Dashboard</div>
+            </div>
+          </div>
+
+          <div className="auth-verified-showcase">
+            <div className="auth-verified-head">
+              <div className="auth-verified-title">
+                <BadgeCheck size={15} />
+                Alumni Terverifikasi PPDIKTI
+              </div>
+              <span className="badge badge-success">Preview Publik</span>
+            </div>
+
+            {verifiedShowcaseLoading ? (
+              <div className="text-sm text-muted">Memuat data verifikasi terbaru...</div>
+            ) : verifiedShowcase.length === 0 ? (
+              <div className="text-sm text-muted">Belum ada data alumni terverifikasi untuk ditampilkan.</div>
+            ) : (
+              <div className="auth-verified-list">
+                {verifiedShowcase.map((row) => {
+                  const summary = getPpdiktiSummary(row);
+                  return (
+                    <article key={`auth-verified-${row.id}`} className="auth-verified-item">
+                      <div className="auth-verified-row">
+                        <strong>{row.nama_lengkap}</strong>
+                        <span className="badge badge-success">Verified</span>
+                      </div>
+                      <div className="text-xs text-muted">{row.id}</div>
+                      <div className="text-xs">{summary.prodi}</div>
+                      <div className="text-xs text-muted">{summary.perguruanTinggi} • NIM {summary.nim}</div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </section>
 

@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { MOCK_LOGS, MOCK_REVIEWS, MOCK_SOURCES } from './MockData';
+import { selectVerifiedAlumni } from '../lib/verifiedAlumni';
 
 const AppContext = createContext();
 const DETAIL_ALUMNI_TABLE = 'detail-alumni';
@@ -101,6 +102,8 @@ export const AppProvider = ({ children }) => {
   const [reviews, setReviews] = useState(MOCK_REVIEWS);
   const [logs, setLogs] = useState(MOCK_LOGS);
   const [alumniLoading, setAlumniLoading] = useState(false);
+  const [verifiedShowcaseAlumni, setVerifiedShowcaseAlumni] = useState([]);
+  const [verifiedShowcaseLoading, setVerifiedShowcaseLoading] = useState(false);
   const [selectedPpdiktiAlumni, setSelectedPpdiktiAlumni] = useState(null);
 
   useEffect(() => {
@@ -184,6 +187,29 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const loadVerifiedShowcase = async () => {
+    setVerifiedShowcaseLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from(DETAIL_ALUMNI_TABLE)
+        .select('*')
+        .eq('ppdikti_verified', true)
+        .order('ppdikti_checked_at', { ascending: false, nullsFirst: false })
+        .limit(8);
+
+      if (error) {
+        throw new Error(error.message || 'Gagal memuat data verifikasi PPDIKTI.');
+      }
+
+      const normalizedRows = Array.isArray(data)
+        ? data.map(normalizeAlumniRow).filter(Boolean)
+        : [];
+      setVerifiedShowcaseAlumni(selectVerifiedAlumni(normalizedRows));
+    } finally {
+      setVerifiedShowcaseLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!authReady) {
       return;
@@ -198,6 +224,25 @@ export const AppProvider = ({ children }) => {
       addLog(error.message || 'Gagal memuat data alumni dari database.', 'error');
     });
   }, [authReady, authUser]);
+
+  useEffect(() => {
+    if (!authReady) {
+      return;
+    }
+
+    loadVerifiedShowcase().catch(() => {
+      setVerifiedShowcaseAlumni([]);
+    });
+  }, [authReady]);
+
+  const verifiedAlumni = useMemo(() => selectVerifiedAlumni(alumni), [alumni]);
+  const publicVerifiedAlumni = useMemo(() => {
+    if (verifiedAlumni.length > 0) {
+      return verifiedAlumni;
+    }
+
+    return selectVerifiedAlumni(verifiedShowcaseAlumni);
+  }, [verifiedAlumni, verifiedShowcaseAlumni]);
 
   // Stats
   const stats = {
@@ -413,6 +458,9 @@ export const AppProvider = ({ children }) => {
     signUp,
     logout,
     alumni, setAlumni,
+    verifiedAlumni,
+    publicVerifiedAlumni,
+    verifiedShowcaseLoading,
     sources, setSources,
     reviews, setReviews,
     logs, setLogs,

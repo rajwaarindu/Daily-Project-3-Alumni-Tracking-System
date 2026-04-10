@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { useAppContext } from '../store/AppContext';
-import { Users, CheckCircle, AlertTriangle, HelpCircle } from 'lucide-react';
+import { Users, CheckCircle, AlertTriangle, HelpCircle, BadgeCheck } from 'lucide-react';
+import { getPpdiktiSummary, pickRandomItems } from '../lib/verifiedAlumni';
 
 export default function Dashboard() {
-  const { stats, alumni } = useAppContext();
+  const { stats, verifiedAlumni } = useAppContext();
 
   const data = [
     { name: 'Teridentifikasi', value: stats.identified, color: '#68d391' },
@@ -13,7 +14,7 @@ export default function Dashboard() {
     { name: 'Tidak Ditemukan', value: stats.total - (stats.identified + stats.needReview + stats.untracked), color: '#fc8181' },
   ].filter(d => d.value > 0);
 
-  const recentIdentified = alumni.filter(a => a.status_pelacakan === 'Teridentifikasi dari sumber publik').slice(0, 5);
+  const recentVerified = useMemo(() => pickRandomItems(verifiedAlumni, 3), [verifiedAlumni]);
 
   return (
     <div className="animate-fade">
@@ -42,6 +43,11 @@ export default function Dashboard() {
           <div className="stat-icon red"><HelpCircle size={20} /></div>
           <div className="stat-value">{stats.untracked}</div>
           <div className="stat-label">Belum Dilacak</div>
+        </div>
+        <div className="stat-card purple">
+          <div className="stat-icon purple"><BadgeCheck size={20} /></div>
+          <div className="stat-value">{verifiedAlumni.length}</div>
+          <div className="stat-label">Terverifikasi PPDIKTI</div>
         </div>
       </div>
 
@@ -81,40 +87,51 @@ export default function Dashboard() {
 
         <div className="card">
           <div className="card-header">
-            <h2 className="card-title">Terbaru Teridentifikasi</h2>
+            <h2 className="card-title">Alumni Terverifikasi PPDIKTI</h2>
+            <span className="badge badge-success">Source of truth: PPDIKTI</span>
           </div>
-          {recentIdentified.length > 0 ? (
+          {recentVerified.length > 0 ? (
             <div className="table-wrapper">
-              <table>
+              <table className="verified-table">
                 <thead>
                   <tr>
                     <th>Nama Alumni</th>
-                    <th>Instansi / Jabatan</th>
-                    <th>Update</th>
+                    <th>Data Akademik</th>
+                    <th>Status PPDIKTI</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recentIdentified.map(a => (
+                  {recentVerified.map((a) => {
+                    const summary = getPpdiktiSummary(a);
+                    return (
                     <tr key={a.id}>
                       <td>
                         <strong>{a.nama_lengkap}</strong>
                         <div className="text-xs text-muted mt-1">{a.id}</div>
                       </td>
                       <td>
-                        <div className="text-sm">{a.hasil?.jabatan || '-'}</div>
-                        <div className="text-xs text-muted">{a.hasil?.instansi || '-'}</div>
+                        <div className="text-sm">{summary.prodi}</div>
+                        <div className="text-xs text-muted">{summary.perguruanTinggi}</div>
+                        <div className="text-xs text-muted">NIM: {summary.nim}</div>
                       </td>
-                      <td>{a.last_tracked_date}</td>
+                      <td>
+                        <span className="badge badge-success">Terverifikasi</span>
+                        <div className="text-xs text-muted mt-1">{summary.status}</div>
+                        <div className="text-xs text-muted">
+                          Dicek: {a.ppdikti_checked_at ? new Date(a.ppdikti_checked_at).toLocaleDateString('id-ID') : '-'}
+                        </div>
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           ) : (
             <div className="empty-state">
-              <CheckCircle className="empty-icon" />
-              <div className="empty-title">Belum Ada Tembuan</div>
-              <div className="empty-desc">Jalankan job pelacakan untuk mulai menemukan profil alumni.</div>
+              <BadgeCheck className="empty-icon" />
+              <div className="empty-title">Belum Ada Alumni Terverifikasi</div>
+              <div className="empty-desc">Lakukan verifikasi di menu PPDIKTI untuk menampilkan data terverifikasi di dashboard.</div>
             </div>
           )}
         </div>

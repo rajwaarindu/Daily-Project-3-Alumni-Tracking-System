@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Search, University, User, BookOpen, Loader2, ExternalLink } from 'lucide-react';
 import { useAppContext } from '../store/AppContext';
+import { dedupeAlumniById, selectVerifiedAlumni } from '../lib/verifiedAlumni';
 
 const PDDIKTI_PROXY_BASE = '/api-pddikti';
 
@@ -64,15 +65,8 @@ export default function PPDIKTI() {
     const [mahasiswaDetail, setMahasiswaDetail] = useState(null);
     const [verifySaving, setVerifySaving] = useState(false);
 
-    const uniqueAlumni = useMemo(() => {
-        const seen = new Set();
-        return alumni.filter((item) => {
-            const key = String(item.id || '');
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-    }, [alumni]);
+    const uniqueAlumni = useMemo(() => dedupeAlumniById(alumni), [alumni]);
+    const verifiedAlumni = useMemo(() => selectVerifiedAlumni(uniqueAlumni), [uniqueAlumni]);
 
     const selectedAlumniRecord = useMemo(
         () => alumni.find(item => item.id === selectedAlumniRecordId) || null,
@@ -96,7 +90,7 @@ export default function PPDIKTI() {
 
     const filteredAlumniForPicker = useMemo(() => {
         const keyword = alumniPickerTerm.trim().toLowerCase();
-        const quickPickerSource = uniqueAlumni.filter(item => item.ppdikti_verified);
+        const quickPickerSource = verifiedAlumni;
 
         if (!keyword) {
             return quickPickerSource.slice(0, 10);
@@ -108,7 +102,7 @@ export default function PPDIKTI() {
                 || String(item.nama_lengkap || '').toLowerCase().includes(keyword)
             )
             .slice(0, 10);
-    }, [uniqueAlumni, alumniPickerTerm]);
+    }, [verifiedAlumni, alumniPickerTerm]);
 
     const handleChooseAlumni = (row) => {
         setSelectedAlumniRecordId(row.id);
