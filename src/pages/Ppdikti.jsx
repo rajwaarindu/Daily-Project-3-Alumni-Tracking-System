@@ -41,7 +41,13 @@ function DetailRow({ label, value }) {
 }
 
 export default function PPDIKTI() {
-    const { alumni, alumniLoading, verifyAlumniPpdikti } = useAppContext();
+    const {
+        alumni,
+        alumniLoading,
+        verifyAlumniPpdikti,
+        selectedPpdiktiAlumni,
+        selectAlumniForPpdikti,
+    } = useAppContext();
     const [query, setQuery] = useState({
         namaLengkap: '',
         universitas: '',
@@ -53,25 +59,101 @@ export default function PPDIKTI() {
     const [detailError, setDetailError] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [selectedAlumniRecordId, setSelectedAlumniRecordId] = useState('');
+    const [alumniPickerTerm, setAlumniPickerTerm] = useState('');
     const [selectedMahasiswaId, setSelectedMahasiswaId] = useState('');
     const [mahasiswaDetail, setMahasiswaDetail] = useState(null);
     const [verifySaving, setVerifySaving] = useState(false);
+
+    const uniqueAlumni = useMemo(() => {
+        const seen = new Set();
+        return alumni.filter((item) => {
+            const key = String(item.id || '');
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }, [alumni]);
 
     const selectedAlumniRecord = useMemo(
         () => alumni.find(item => item.id === selectedAlumniRecordId) || null,
         [alumni, selectedAlumniRecordId]
     );
 
-    const unverifiedAlumni = useMemo(
-        () => alumni.filter(item => !item.ppdikti_verified),
-        [alumni]
+    const activeSelectedAlumni = useMemo(
+        () => selectedAlumniRecord || selectedPpdiktiAlumni || null,
+        [selectedAlumniRecord, selectedPpdiktiAlumni]
     );
+
+    const activeSelectedAlumniId = useMemo(
+        () => (activeSelectedAlumni?.id ? String(activeSelectedAlumni.id) : ''),
+        [activeSelectedAlumni]
+    );
+
+    const unverifiedAlumni = useMemo(
+        () => uniqueAlumni.filter(item => !item.ppdikti_verified),
+        [uniqueAlumni]
+    );
+
+    const filteredAlumniForPicker = useMemo(() => {
+        const keyword = alumniPickerTerm.trim().toLowerCase();
+        const quickPickerSource = uniqueAlumni.filter(item => item.ppdikti_verified);
+
+        if (!keyword) {
+            return quickPickerSource.slice(0, 10);
+        }
+
+        return quickPickerSource
+            .filter((item) =>
+                String(item.id || '').toLowerCase().includes(keyword)
+                || String(item.nama_lengkap || '').toLowerCase().includes(keyword)
+            )
+            .slice(0, 10);
+    }, [uniqueAlumni, alumniPickerTerm]);
+
+    const handleChooseAlumni = (row) => {
+        setSelectedAlumniRecordId(row.id);
+        selectAlumniForPpdikti(row);
+        setSearchError('');
+        setDetailError('');
+    };
 
     useEffect(() => {
         if (!selectedAlumniRecordId && unverifiedAlumni.length > 0) {
             setSelectedAlumniRecordId(unverifiedAlumni[0].id);
         }
     }, [selectedAlumniRecordId, unverifiedAlumni]);
+
+    useEffect(() => {
+        if (!selectedPpdiktiAlumni) {
+            return;
+        }
+
+        const selectedFromQueue = alumni.find((item) => item.id === selectedPpdiktiAlumni.id) || null;
+        const sourceRecord = selectedFromQueue || selectedPpdiktiAlumni;
+
+        const firstAffiliation = Array.isArray(sourceRecord.afiliasi_kata_kunci)
+            ? sourceRecord.afiliasi_kata_kunci[0] || ''
+            : '';
+        const firstProdi = Array.isArray(sourceRecord.konteks_kata_kunci)
+            ? sourceRecord.konteks_kata_kunci[0] || ''
+            : '';
+
+        setQuery({
+            namaLengkap: sourceRecord.nama_lengkap || '',
+            universitas: firstAffiliation,
+            prodi: firstProdi,
+        });
+
+        setSelectedMahasiswaId('');
+        setSearchResults([]);
+        setSearchError('');
+        setDetailError('');
+        setMahasiswaDetail(sourceRecord.ppdikti_detail || null);
+
+        if (selectedFromQueue && selectedFromQueue.id !== selectedAlumniRecordId) {
+            setSelectedAlumniRecordId(selectedFromQueue.id);
+        }
+    }, [alumni, selectedAlumniRecordId, selectedPpdiktiAlumni]);
 
     useEffect(() => {
         if (!selectedAlumniRecord) return;
@@ -172,7 +254,7 @@ export default function PPDIKTI() {
     };
 
     const saveVerification = async (verified) => {
-        if (!selectedAlumniRecordId) {
+        if (!activeSelectedAlumniId) {
             setDetailError('Pilih data alumni terlebih dahulu.');
             return;
         }
@@ -181,7 +263,7 @@ export default function PPDIKTI() {
         setDetailError('');
 
         try {
-            await verifyAlumniPpdikti(selectedAlumniRecordId, verified, mahasiswaDetail);
+            await verifyAlumniPpdikti(activeSelectedAlumniId, verified, mahasiswaDetail);
         } catch (error) {
             setDetailError(error.message || 'Gagal menyimpan status verifikasi PPDIKTI.');
         } finally {
@@ -202,13 +284,49 @@ export default function PPDIKTI() {
                     <div className="card-header">
                         <div>
                             <h2 className="card-title">Antrian Verifikasi Alumni</h2>
-                            <p className="text-sm text-muted">Pilih data dari Alumni.sqlite agar proses pengecekan dilakukan satu per satu.</p>
+                            <p className="text-sm text-muted">Pilih data alumni dari Supabase agar proses pengecekan dilakukan satu per satu.</p>
                         </div>
                         <div className="badge badge-info">Belum Verifikasi: {unverifiedAlumni.length}</div>
                     </div>
 
+                    <div className="form-group" style={{ marginBottom: 12 }}>
+                        <label className="form-label">Pilih Alumni Cepat (Sudah Verified)</label>
+                        <div className="search-box">
+                            <Search size={16} className="text-muted" />
+                            <input
+                                type="text"
+                                value={alumniPickerTerm}
+                                onChange={(event) => setAlumniPickerTerm(event.target.value)}
+                                placeholder="Cari nama atau ID alumni verified..."
+                            />
+                        </div>
+                        <div className="ppdikti-result-list" style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto' }}>
+                            {filteredAlumniForPicker.map((row) => (
+                                <button
+                                    key={`picker-${row.id}`}
+                                    type="button"
+                                    className={`ppdikti-queue-item ${activeSelectedAlumniId === String(row.id) ? 'active' : ''}`}
+                                    onClick={() => handleChooseAlumni(row)}
+                                >
+                                    <div className="ppdikti-result-head">
+                                        <div>
+                                            <div className="ppdikti-result-name">{row.nama_lengkap}</div>
+                                            <div className="text-xs text-muted">{row.id}</div>
+                                        </div>
+                                        <span className={`badge ${row.ppdikti_verified ? 'badge-success' : 'badge-muted'}`}>
+                                            {row.ppdikti_verified ? 'Verified' : 'Pending'}
+                                        </span>
+                                    </div>
+                                </button>
+                            ))}
+                            {filteredAlumniForPicker.length === 0 && (
+                                <div className="text-xs text-muted">Data alumni verified tidak ditemukan.</div>
+                            )}
+                        </div>
+                    </div>
+
                     {alumniLoading ? (
-                        <div className="text-sm text-muted">Memuat data alumni dari SQLite...</div>
+                        <div className="text-sm text-muted">Memuat data alumni dari Supabase...</div>
                     ) : (
                         <div className="ppdikti-result-list">
                             {unverifiedAlumni.length === 0 && (
@@ -219,7 +337,7 @@ export default function PPDIKTI() {
                                     key={row.id}
                                     type="button"
                                     className={`ppdikti-queue-item ${selectedAlumniRecordId === row.id ? 'active' : ''}`}
-                                    onClick={() => setSelectedAlumniRecordId(row.id)}
+                                    onClick={() => handleChooseAlumni(row)}
                                 >
                                     <div className="ppdikti-result-head">
                                         <div>
@@ -246,6 +364,25 @@ export default function PPDIKTI() {
                         </a>
                     </div>
 
+                    {selectedPpdiktiAlumni && (
+                        <div className="auth-alert" style={{ marginBottom: 12 }}>
+                            Data dari Data Master Alumni terhubung otomatis: <strong>{selectedPpdiktiAlumni.nama_lengkap}</strong>
+                            {selectedPpdiktiAlumni.id && (
+                                <span className="text-xs text-muted" style={{ marginLeft: 6 }}>
+                                    ({selectedPpdiktiAlumni.id})
+                                </span>
+                            )}
+                            <button
+                                type="button"
+                                className="btn btn-xs btn-secondary"
+                                style={{ marginLeft: 12 }}
+                                onClick={() => selectAlumniForPpdikti(null)}
+                            >
+                                Bersihkan Pilihan
+                            </button>
+                        </div>
+                    )}
+
                     <form onSubmit={searchMahasiswa} className="ppdikti-form">
                         <div className="form-group">
                             <label className="form-label">Data Alumni Terpilih</label>
@@ -253,7 +390,7 @@ export default function PPDIKTI() {
                                 <User size={16} className="text-muted" />
                                 <input
                                     type="text"
-                                    value={selectedAlumniRecord ? `${selectedAlumniRecord.id} - ${selectedAlumniRecord.nama_lengkap}` : ''}
+                                    value={activeSelectedAlumni ? `${activeSelectedAlumni.id} - ${activeSelectedAlumni.nama_lengkap}` : ''}
                                     readOnly
                                     placeholder="Pilih alumni dari panel antrian"
                                 />
@@ -319,7 +456,6 @@ export default function PPDIKTI() {
                     </form>
 
                     <div className="ppdikti-result-section">
-                        <h3 className="ppdikti-subtitle">Hasil Pencarian</h3>
                         {searchResults.length === 0 ? (
                             <div className="text-sm text-muted">Belum ada hasil. Jalankan pencarian untuk menampilkan data mahasiswa.</div>
                         ) : (

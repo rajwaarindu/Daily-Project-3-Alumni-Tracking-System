@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api-pddikti': {
-        target: 'https://api-pddikti.rone.dev',
+        target: 'https://pddikti.fastapicloud.dev/api',
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api-pddikti/, ''),

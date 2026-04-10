@@ -1,13 +1,23 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../store/AppContext';
 import { Search, Plus, Edit2, X, GraduationCap, Trash2 } from 'lucide-react';
 
 export default function AlumniList() {
-  const { alumni, alumniLoading, addAlumni, updateAlumni, deleteAlumni } = useAppContext();
+  const navigate = useNavigate();
+  const {
+    alumni,
+    alumniLoading,
+    addLog,
+    addAlumni,
+    updateAlumni,
+    deleteAlumni,
+    selectAlumniForPpdikti,
+  } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [selectedAlumni, setSelectedAlumni] = useState(null);
+  const [selectedAlumniId, setSelectedAlumniId] = useState('');
   const [formError, setFormError] = useState('');
   const [newAlumni, setNewAlumni] = useState({
     nama_lengkap: '',
@@ -16,10 +26,17 @@ export default function AlumniList() {
     konteks_kata_kunci: ''
   });
 
-  const filteredAlumni = alumni.filter(a => 
-    a.nama_lengkap.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    a.id.toLowerCase().includes(searchTerm.toLowerCase())
+  const selectedAlumni = useMemo(
+    () => alumni.find((item) => item.id === selectedAlumniId) || null,
+    [alumni, selectedAlumniId]
   );
+
+  const filteredAlumni = useMemo(() => {
+    return alumni.filter(a =>
+      (a.nama_lengkap || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(a.id).toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [alumni, searchTerm]);
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -35,7 +52,7 @@ export default function AlumniList() {
       if (editingId) {
         const updated = await updateAlumni(editingId, dataToSave);
         if (selectedAlumni?.id === updated.id) {
-          setSelectedAlumni(updated);
+          setSelectedAlumniId(updated.id);
         }
       } else {
         const created = await addAlumni({
@@ -45,7 +62,7 @@ export default function AlumniList() {
           hasil: null,
           ppdikti_verified: false,
         });
-        setSelectedAlumni(created);
+        setSelectedAlumniId(created.id);
       }
       closeModal();
     } catch (error) {
@@ -69,7 +86,7 @@ export default function AlumniList() {
       try {
         await deleteAlumni(id);
         if (selectedAlumni?.id === id) {
-          setSelectedAlumni(null);
+          setSelectedAlumniId('');
         }
       } catch (error) {
         window.alert(error.message || 'Gagal menghapus data alumni.');
@@ -96,6 +113,14 @@ export default function AlumniList() {
     return isVerified
       ? <span className="badge badge-success">Terverifikasi</span>
       : <span className="badge badge-muted">Belum Verifikasi</span>;
+  };
+
+  const moveToPpdikti = (alumniData) => {
+    selectAlumniForPpdikti(alumniData);
+    if (addLog) {
+      addLog(`Data alumni dipilih untuk cek PPDIKTI: ${alumniData.nama_lengkap}`, 'info');
+    }
+    navigate('/ppdikti');
   };
 
   return (
@@ -140,11 +165,11 @@ export default function AlumniList() {
             <tbody>
               {alumniLoading && (
                 <tr>
-                  <td colSpan="7" className="text-center py-8 text-muted">Memuat data dari Alumni.sqlite...</td>
+                  <td colSpan="7" className="text-center py-8 text-muted">Memuat data dari Supabase...</td>
                 </tr>
               )}
               {filteredAlumni.map(a => (
-                <tr key={a.id} className="table-row-clickable" onClick={() => setSelectedAlumni(a)}>
+                <tr key={a.id} className="table-row-clickable" onClick={() => setSelectedAlumniId(a.id)}>
                   <td><strong>{a.id}</strong></td>
                   <td>
                     <div className="flex items-center gap-2">
@@ -168,6 +193,7 @@ export default function AlumniList() {
                   <td>
                     <div className="flex gap-2">
                       <button className="btn btn-xs btn-secondary" onClick={(event) => { event.stopPropagation(); handleEdit(a); }}><Edit2 size={12} /> Edit</button>
+                      <button className="btn btn-xs btn-primary" onClick={(event) => { event.stopPropagation(); moveToPpdikti(a); }}>Cek PPDIKTI</button>
                       <button className="btn btn-xs btn-outline border-red-500/50 text-red-500 hover:bg-red-500 hover:text-white" onClick={(event) => { event.stopPropagation(); handleDelete(a.id); }}><Trash2 size={12} /> Hapus</button>
                     </div>
                   </td>

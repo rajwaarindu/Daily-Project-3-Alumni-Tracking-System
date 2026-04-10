@@ -1,6 +1,5 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, randomUUID, pbkdf2Sync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { MOCK_ALUMNI } from '../src/store/MockData.js';
@@ -11,6 +10,11 @@ const authDatabasePath = path.resolve(__dirname, '..', 'src', 'database', 'db.sq
 const alumniDatabasePath = path.resolve(__dirname, '..', 'src', 'database', 'alumni.sqlite');
 const alumniLinkedDataPath = path.resolve(__dirname, '..', 'src', 'database', 'data-alumni.sqlite');
 const serverPort = 3001;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_DEFAULT_KEY
+  || process.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+  || process.env.SUPABASE_ANON_KEY
+  || process.env.VITE_SUPABASE_ANON_KEY;
 
 const db = new DatabaseSync(authDatabasePath);
 const alumniDb = new DatabaseSync(alumniDatabasePath);
@@ -18,26 +22,6 @@ const alumniLinkedDb = new DatabaseSync(alumniLinkedDataPath);
 
 db.exec(`
   PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    last_login_at TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 `);
 
 alumniDb.exec(`
@@ -145,44 +129,9 @@ const sendJson = (response, statusCode, payload) => {
   response.end(JSON.stringify(payload));
 };
 
-const hashPassword = (password, salt = randomBytes(16).toString('hex')) => {
-  const derived = pbkdf2Sync(password, salt, 120000, 64, 'sha256').toString('hex');
-  return `pbkdf2$sha256$120000$${salt}$${derived}`;
-};
-
-const verifyPassword = (password, encodedHash) => {
-  const [scheme, algorithm, iterationCount, salt, storedHash] = encodedHash.split('$');
-
-  if (scheme !== 'pbkdf2' || algorithm !== 'sha256' || !salt || !storedHash) {
-    return false;
-  }
-
-  const derived = pbkdf2Sync(password, salt, Number(iterationCount), 64, 'sha256');
-  const stored = Buffer.from(storedHash, 'hex');
-
-  if (stored.length !== derived.length) {
-    return false;
-  }
-
-  return timingSafeEqual(stored, derived);
-};
-
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const normalizeName = (value) => String(value || '').trim();
 const now = () => new Date().toISOString();
-const sessionExpiry = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-
-const createSession = (userId) => {
-  const token = randomUUID();
-  const createdAt = now();
-  const expiresAt = sessionExpiry();
-
-  db.prepare(
-    'INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
-  ).run(token, userId, createdAt, expiresAt);
-
-  return token;
-};
 
 const getTokenFromRequest = (request) => {
   const authorization = request.headers.authorization || '';
@@ -195,45 +144,42 @@ const getTokenFromRequest = (request) => {
   return Array.isArray(sessionToken) ? sessionToken[0] : sessionToken;
 };
 
-const getUserBySessionToken = (token) => {
-  if (!token) {
-    return null;
-  }
+const mapSupabaseUser = (user) => ({
+  id: user.id,
+  name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+  email: user.email,
+  createdAt: user.created_at,
+  lastLoginAt: user.last_sign_in_at,
+});
 
-  const session = db.prepare(
-    `
-      SELECT s.token, s.expires_at, u.id, u.name, u.email, u.created_at, u.last_login_at
-      FROM sessions s
-      INNER JOIN users u ON u.id = s.user_id
-      WHERE s.token = ?
-    `
-  ).get(token);
-
-  if (!session) {
-    return null;
-  }
-
-  if (new Date(session.expires_at).getTime() <= Date.now()) {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-    return null;
+const getSupabaseHeaders = (accessToken) => {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error('Supabase environment variables are missing on server runtime.');
   }
 
   return {
-    id: session.id,
-    name: session.name,
-    email: session.email,
-    createdAt: session.created_at,
-    lastLoginAt: session.last_login_at,
+    apikey: supabasePublishableKey,
+    Authorization: accessToken ? `Bearer ${accessToken}` : `Bearer ${supabasePublishableKey}`,
+    'Content-Type': 'application/json',
   };
 };
 
-const createUserResponse = (user) => ({
-  id: user.id,
-  name: user.name,
-  email: user.email,
-  createdAt: user.created_at,
-  lastLoginAt: user.last_login_at,
-});
+const supabaseRequest = async (endpoint, method = 'GET', body = null, accessToken = null) => {
+  const response = await fetch(`${supabaseUrl}/auth/v1${endpoint}`, {
+    method,
+    headers: getSupabaseHeaders(accessToken),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = data?.msg || data?.error_description || data?.error || 'Autentikasi Supabase gagal.';
+    throw new Error(message);
+  }
+
+  return data;
+};
 
 const parseJsonValue = (value, fallback) => {
   if (!value) {
@@ -318,16 +264,21 @@ const normalizeStringList = (value) => {
   return [];
 };
 
-const requireAuthUser = (request, response) => {
+const requireAuthUser = async (request, response) => {
   const token = getTokenFromRequest(request);
-  const user = getUserBySessionToken(token);
 
-  if (!user) {
-    sendJson(response, 401, { error: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
+  if (!token) {
+    sendJson(response, 401, { error: 'Token autentikasi tidak ditemukan.' });
     return null;
   }
 
-  return user;
+  try {
+    const user = await supabaseRequest('/user', 'GET', null, token);
+    return mapSupabaseUser(user);
+  } catch {
+    sendJson(response, 401, { error: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
+    return null;
+  }
 };
 
 const server = createServer(async (request, response) => {
@@ -365,31 +316,22 @@ const server = createServer(async (request, response) => {
         return;
       }
 
-      const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+      const data = await supabaseRequest('/signup', 'POST', {
+        email,
+        password,
+        data: { name },
+      });
 
-      if (existingUser) {
-        sendJson(response, 409, { error: 'Email sudah terdaftar.' });
+      if (!data.session || !data.user) {
+        sendJson(response, 400, {
+          error: 'Pendaftaran berhasil, tetapi akun perlu verifikasi email sebelum bisa login.',
+        });
         return;
       }
 
-      const user = {
-        id: randomUUID(),
-        name,
-        email,
-        password_hash: hashPassword(password),
-        created_at: now(),
-        last_login_at: now(),
-      };
-
-      db.prepare(
-        'INSERT INTO users (id, name, email, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(user.id, user.name, user.email, user.password_hash, user.created_at, user.last_login_at);
-
-      const token = createSession(user.id);
-
       sendJson(response, 201, {
-        token,
-        user: createUserResponse(user),
+        token: data.session.access_token,
+        user: mapSupabaseUser(data.user),
       });
       return;
     }
@@ -404,54 +346,39 @@ const server = createServer(async (request, response) => {
         return;
       }
 
-      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+      const data = await supabaseRequest('/token?grant_type=password', 'POST', {
+        email,
+        password,
+      });
 
-      if (!user || !verifyPassword(password, user.password_hash)) {
-        sendJson(response, 401, { error: 'Email atau password tidak valid.' });
-        return;
-      }
-
-      const updatedLoginAt = now();
-      db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(updatedLoginAt, user.id);
-
-      const token = createSession(user.id);
+      const user = await supabaseRequest('/user', 'GET', null, data.access_token);
 
       sendJson(response, 200, {
-        token,
-        user: {
-          ...createUserResponse({ ...user, last_login_at: updatedLoginAt }),
-          lastLoginAt: updatedLoginAt,
-        },
+        token: data.access_token,
+        user: mapSupabaseUser(user),
       });
       return;
     }
 
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {
       const token = getTokenFromRequest(request);
-      const user = getUserBySessionToken(token);
 
-      if (!user) {
+      try {
+        const user = await supabaseRequest('/user', 'GET', null, token);
+        sendJson(response, 200, { user: mapSupabaseUser(user) });
+      } catch {
         sendJson(response, 401, { error: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
-        return;
       }
-
-      sendJson(response, 200, { user });
       return;
     }
 
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
-      const token = getTokenFromRequest(request);
-
-      if (token) {
-        db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-      }
-
       sendJson(response, 200, { ok: true });
       return;
     }
 
     if (url.pathname === '/api/alumni' && request.method === 'GET') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 
@@ -478,7 +405,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/alumni' && request.method === 'POST') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 
@@ -545,7 +472,7 @@ const server = createServer(async (request, response) => {
 
     const alumniIdMatch = url.pathname.match(/^\/api\/alumni\/([^/]+)$/);
     if (alumniIdMatch && request.method === 'GET') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 
@@ -568,7 +495,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (alumniIdMatch && request.method === 'PUT') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 
@@ -633,7 +560,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (alumniIdMatch && request.method === 'DELETE') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 
@@ -653,7 +580,7 @@ const server = createServer(async (request, response) => {
 
     const ppdiktiVerifyMatch = url.pathname.match(/^\/api\/alumni\/([^/]+)\/ppdikti-verify$/);
     if (ppdiktiVerifyMatch && request.method === 'POST') {
-      if (!requireAuthUser(request, response)) {
+      if (!await requireAuthUser(request, response)) {
         return;
       }
 

@@ -1,32 +1,94 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { MOCK_ALUMNI, MOCK_LOGS, MOCK_REVIEWS, MOCK_SOURCES } from './MockData';
+import { supabase } from '../lib/supabaseClient';
+import { MOCK_LOGS, MOCK_REVIEWS, MOCK_SOURCES } from './MockData';
 
 const AppContext = createContext();
-const AUTH_TOKEN_KEY = 'alumtrack.authToken';
+const DETAIL_ALUMNI_TABLE = 'detail-alumni';
 
-const apiRequest = async (path, options = {}) => {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
+const normalizeStringList = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+
+  return [];
+};
+
+const toDateOnly = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().split('T')[0];
+};
+
+const normalizeAlumniRow = (row) => {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: String(row.id),
+    nama_lengkap: row.nama_lengkap || '',
+    variasi_nama: normalizeStringList(row.variasi_nama),
+    afiliasi_kata_kunci: normalizeStringList(row.afiliasi_kata_kunci),
+    konteks_kata_kunci: normalizeStringList(row.konteks_kata_kunci),
+    status_pelacakan: row.status_pelacakan || 'Belum Dilacak',
+    last_tracked_date: row.last_tracked_date || null,
+    hasil: row.hasil || null,
+    ppdikti_verified: Boolean(row.ppdikti_verified),
+    ppdikti_checked_at: row.ppdikti_checked_at || null,
+    ppdikti_detail: row.ppdikti_detail || null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+};
+
+const buildAlumniPayload = (payload = {}) => {
+  const preparedPayload = {
+    nama_lengkap: String(payload.nama_lengkap || '').trim(),
+    variasi_nama: normalizeStringList(payload.variasi_nama),
+    afiliasi_kata_kunci: normalizeStringList(payload.afiliasi_kata_kunci),
+    konteks_kata_kunci: normalizeStringList(payload.konteks_kata_kunci),
+    status_pelacakan: String(payload.status_pelacakan || '').trim() || 'Belum Dilacak',
+    last_tracked_date: payload.last_tracked_date ?? null,
+    hasil: payload.hasil ?? null,
+    ppdikti_verified: Boolean(payload.ppdikti_verified),
+    ppdikti_checked_at: payload.ppdikti_checked_at ?? null,
+    ppdikti_detail: payload.ppdikti_detail ?? null,
   };
 
-  if (token && !headers.Authorization) {
-    headers.Authorization = `Bearer ${token}`;
+  if (Object.prototype.hasOwnProperty.call(payload, 'id')) {
+    preparedPayload.id = String(payload.id);
   }
 
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    headers,
-  });
+  return preparedPayload;
+};
 
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Permintaan gagal diproses.');
+const normalizePpdiktiSelection = (payload) => {
+  if (!payload) {
+    return null;
   }
 
-  return data;
+  const normalized = normalizeAlumniRow(payload);
+  return normalized ? {
+    id: normalized.id,
+    nama_lengkap: normalized.nama_lengkap,
+    afiliasi_kata_kunci: normalized.afiliasi_kata_kunci,
+    konteks_kata_kunci: normalized.konteks_kata_kunci,
+    ppdikti_detail: normalized.ppdikti_detail,
+    ppdikti_verified: normalized.ppdikti_verified,
+    selected_at: new Date().toISOString(),
+  } : null;
 };
 
 export const useAppContext = () => useContext(AppContext);
@@ -39,27 +101,32 @@ export const AppProvider = ({ children }) => {
   const [reviews, setReviews] = useState(MOCK_REVIEWS);
   const [logs, setLogs] = useState(MOCK_LOGS);
   const [alumniLoading, setAlumniLoading] = useState(false);
+  const [selectedPpdiktiAlumni, setSelectedPpdiktiAlumni] = useState(null);
 
   useEffect(() => {
     let isMounted = true;
 
     const initializeAuth = async () => {
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-
-      if (!token) {
-        if (isMounted) {
-          setAuthReady(true);
-        }
-        return;
-      }
-
       try {
-        const data = await apiRequest('/auth/me');
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (error) {
+          throw error;
+        }
+
         if (isMounted) {
-          setAuthUser(data.user);
+          setAuthUser(user ? {
+            id: user.id,
+            name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+            email: user.email,
+            createdAt: user.created_at,
+            lastLoginAt: user.last_sign_in_at,
+          } : null);
         }
       } catch {
-        localStorage.removeItem(AUTH_TOKEN_KEY);
         if (isMounted) {
           setAuthUser(null);
         }
@@ -72,16 +139,46 @@ export const AppProvider = ({ children }) => {
 
     initializeAuth();
 
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!isMounted) {
+        return;
+      }
+
+      const user = session?.user;
+      setAuthUser(user ? {
+        id: user.id,
+        name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+        email: user.email,
+        createdAt: user.created_at,
+        lastLoginAt: user.last_sign_in_at,
+      } : null);
+      setAuthReady(true);
+    });
+
     return () => {
       isMounted = false;
+      subscription.unsubscribe();
     };
   }, []);
 
   const loadAlumni = async () => {
     setAlumniLoading(true);
     try {
-      const data = await apiRequest('/alumni');
-      setAlumni(Array.isArray(data.alumni) ? data.alumni : []);
+      const { data, error } = await supabase
+        .from(DETAIL_ALUMNI_TABLE)
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        throw new Error(error.message || 'Gagal memuat data alumni dari Supabase.');
+      }
+
+      const normalizedRows = Array.isArray(data)
+        ? data.map(normalizeAlumniRow).filter(Boolean)
+        : [];
+      setAlumni(normalizedRows);
     } finally {
       setAlumniLoading(false);
     }
@@ -121,39 +218,86 @@ export const AppProvider = ({ children }) => {
   };
 
   const updateAlumniStatus = (id, status, hasil = null) => {
-    setAlumni(prev => prev.map(a => 
-      a.id === id ? { ...a, status_pelacakan: status, hasil: hasil || a.hasil, last_tracked_date: new Date().toISOString().split('T')[0] } : a
+    const trackedDate = toDateOnly(new Date().toISOString());
+
+    setAlumni(prev => prev.map(a =>
+      a.id === id
+        ? { ...a, status_pelacakan: status, hasil: hasil || a.hasil, last_tracked_date: trackedDate }
+        : a
     ));
     addLog(`Status profil ${alumni.find(a => a.id === id)?.nama_lengkap} diperbarui menjadi ${status}`, 'success');
+
+    supabase
+      .from(DETAIL_ALUMNI_TABLE)
+      .update({
+        status_pelacakan: status,
+        hasil: hasil ?? undefined,
+        last_tracked_date: trackedDate,
+      })
+      .eq('id', String(id))
+      .then(({ error }) => {
+        if (error) {
+          addLog(error.message || 'Gagal sinkronisasi status alumni ke Supabase.', 'error');
+        }
+      });
   };
 
   const addAlumni = async (newAlumni) => {
-    const data = await apiRequest('/alumni', {
-      method: 'POST',
-      body: JSON.stringify(newAlumni),
+    const payload = buildAlumniPayload({
+      ...newAlumni,
+      status_pelacakan: newAlumni.status_pelacakan || 'Belum Dilacak',
+      ppdikti_verified: Boolean(newAlumni.ppdikti_verified),
+      ppdikti_checked_at: newAlumni.ppdikti_checked_at || null,
+      ppdikti_detail: newAlumni.ppdikti_detail || null,
     });
 
-    setAlumni(prev => [...prev, data.alumni]);
-    addLog(`Alumni baru ditambahkan: ${newAlumni.nama_lengkap}`, 'info');
-    return data.alumni;
+    const { data, error } = await supabase
+      .from(DETAIL_ALUMNI_TABLE)
+      .insert(payload)
+      .select('*')
+      .single();
+
+    if (error) {
+      throw new Error(error.message || 'Gagal menambah data alumni di Supabase.');
+    }
+
+    const normalized = normalizeAlumniRow(data);
+    setAlumni(prev => [normalized, ...prev]);
+    addLog(`Alumni baru ditambahkan: ${normalized.nama_lengkap}`, 'info');
+    return normalized;
   };
 
   const updateAlumni = async (id, updatedData) => {
-    const data = await apiRequest(`/alumni/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      body: JSON.stringify(updatedData),
-    });
+    const payload = buildAlumniPayload(updatedData);
+    delete payload.id;
 
-    setAlumni(prev => prev.map(a => a.id === id ? data.alumni : a));
-    addLog(`Data alumni diperbarui: ${updatedData.nama_lengkap || id}`, 'info');
-    return data.alumni;
+    const { data, error } = await supabase
+      .from(DETAIL_ALUMNI_TABLE)
+      .update(payload)
+      .eq('id', String(id))
+      .select('*')
+      .single();
+
+    if (error) {
+      throw new Error(error.message || 'Gagal memperbarui data alumni di Supabase.');
+    }
+
+    const normalized = normalizeAlumniRow(data);
+    setAlumni(prev => prev.map(a => a.id === String(id) ? normalized : a));
+    addLog(`Data alumni diperbarui: ${normalized.nama_lengkap || id}`, 'info');
+    return normalized;
   };
 
   const deleteAlumni = async (id) => {
     const target = alumni.find(a => a.id === id);
-    await apiRequest(`/alumni/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
+    const { error } = await supabase
+      .from(DETAIL_ALUMNI_TABLE)
+      .delete()
+      .eq('id', String(id));
+
+    if (error) {
+      throw new Error(error.message || 'Gagal menghapus data alumni di Supabase.');
+    }
 
     setAlumni(prev => prev.filter(a => a.id !== id));
     if (target) {
@@ -162,56 +306,104 @@ export const AppProvider = ({ children }) => {
   };
 
   const verifyAlumniPpdikti = async (id, verified, detail = null) => {
-    const data = await apiRequest(`/alumni/${encodeURIComponent(id)}/ppdikti-verify`, {
-      method: 'POST',
-      body: JSON.stringify({ verified, detail }),
-    });
+    const checkedAt = new Date().toISOString();
+    const payload = {
+      ppdikti_verified: Boolean(verified),
+      ppdikti_checked_at: checkedAt,
+      ppdikti_detail: detail ?? null,
+    };
 
-    setAlumni(prev => prev.map(a => a.id === id ? data.alumni : a));
+    const { data, error } = await supabase
+      .from(DETAIL_ALUMNI_TABLE)
+      .update(payload)
+      .eq('id', String(id))
+      .select('*');
+
+    if (error) {
+      throw new Error(error.message || 'Gagal menyimpan verifikasi PPDIKTI di Supabase.');
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error('Data alumni tidak ditemukan di tabel detail-alumni. Pilih alumni dari antrian PPDIKTI terlebih dahulu.');
+    }
+
+    if (data.length > 1) {
+      throw new Error('Ditemukan lebih dari satu baris untuk ID alumni yang sama. Pastikan kolom id unik.');
+    }
+
+    const normalized = normalizeAlumniRow(data[0]);
+    setAlumni(prev => prev.map(a => a.id === String(id) ? normalized : a));
     addLog(
-      `Verifikasi PPDIKTI untuk ${data.alumni.nama_lengkap}: ${verified ? 'Terverifikasi' : 'Belum Terverifikasi'}`,
+      `Verifikasi PPDIKTI untuk ${normalized.nama_lengkap}: ${verified ? 'Terverifikasi' : 'Belum Terverifikasi'}`,
       verified ? 'success' : 'warning'
     );
 
-    return data.alumni;
+    return normalized;
   };
 
-  const storeSession = (token, user) => {
-    localStorage.setItem(AUTH_TOKEN_KEY, token);
-    setAuthUser(user);
+  const selectAlumniForPpdikti = (payload) => {
+    setSelectedPpdiktiAlumni(normalizePpdiktiSelection(payload));
   };
 
   const signIn = async ({ email, password }) => {
-    const data = await apiRequest('/auth/signin', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    storeSession(data.token, data.user);
-    return data.user;
+    if (error) {
+      throw new Error(error.message || 'Autentikasi gagal.');
+    }
+
+    const user = data.user;
+    const normalizedUser = {
+      id: user.id,
+      name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+      email: user.email,
+      createdAt: user.created_at,
+      lastLoginAt: user.last_sign_in_at,
+    };
+
+    setAuthUser(normalizedUser);
+    return normalizedUser;
   };
 
   const signUp = async ({ name, email, password }) => {
-    const data = await apiRequest('/auth/signup', {
-      method: 'POST',
-      body: JSON.stringify({ name, email, password }),
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name,
+        },
+      },
     });
 
-    storeSession(data.token, data.user);
-    return data.user;
+    if (error) {
+      throw new Error(error.message || 'Registrasi gagal.');
+    }
+
+    const user = data.user;
+    const normalizedUser = user ? {
+      id: user.id,
+      name: user.user_metadata?.name || user.email?.split('@')[0] || name || 'User',
+      email: user.email,
+      createdAt: user.created_at,
+      lastLoginAt: user.last_sign_in_at,
+    } : null;
+
+    if (normalizedUser) {
+      setAuthUser(normalizedUser);
+    }
+
+    return normalizedUser;
   };
 
   const logout = async () => {
-    try {
-      await apiRequest('/auth/logout', {
-        method: 'POST',
-      });
-    } catch {
-      // Session may already be gone; clear local state regardless.
-    } finally {
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-      setAuthUser(null);
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      throw new Error(error.message || 'Gagal logout.');
     }
+
+    setAuthUser(null);
   };
 
   const value = {
@@ -232,7 +424,9 @@ export const AppProvider = ({ children }) => {
     addAlumni,
     updateAlumni,
     deleteAlumni,
-    verifyAlumniPpdikti
+    verifyAlumniPpdikti,
+    selectedPpdiktiAlumni,
+    selectAlumniForPpdikti
   };
 
   return (
